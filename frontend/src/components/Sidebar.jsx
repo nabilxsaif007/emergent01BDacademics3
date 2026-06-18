@@ -1,6 +1,6 @@
 import StatusDot from "./StatusDot.jsx";
 
-export default function Sidebar({ agents, connected, selectedId, onSelect, onNew }) {
+export default function Sidebar({ agents, connected, view, selectedId, onOverview, onSelect, onNew }) {
   const running = agents.filter((a) => a.status === "running").length;
 
   return (
@@ -20,6 +20,13 @@ export default function Sidebar({ agents, connected, selectedId, onSelect, onNew
         <div><strong>{running}</strong> running</div>
       </div>
 
+      <button
+        className={`nav-item ${view === "overview" ? "active" : ""}`}
+        onClick={onOverview}
+      >
+        ▦ Fleet overview
+      </button>
+
       <button className="btn primary block" onClick={onNew}>+ New agent</button>
 
       <div className="agent-list">
@@ -27,7 +34,7 @@ export default function Sidebar({ agents, connected, selectedId, onSelect, onNew
         {agents.map((a) => (
           <button
             key={a.id}
-            className={`agent-row ${a.id === selectedId ? "active" : ""}`}
+            className={`agent-row ${a.id === selectedId && view === "detail" ? "active" : ""}`}
             onClick={() => onSelect(a.id)}
           >
             <StatusDot status={a.status} />

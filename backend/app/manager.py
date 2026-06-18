@@ -158,6 +158,9 @@ class AgentManager:
         await self.conns.broadcast(
             {"type": "log", "agent_id": agent.id, "line": line.model_dump()}
         )
+        # surface the latest line on the agent row for the fleet overview
+        agent.last_activity = line.text
+        await self._touch(agent)
 
     async def _add_message(self, agent: Agent, msg: ChatMessage) -> None:
         self.store.add_message(agent.id, msg)

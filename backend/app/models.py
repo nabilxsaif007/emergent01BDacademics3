@@ -56,6 +56,7 @@ class Agent(BaseModel):
     created_at: float = Field(default_factory=_now)
     updated_at: float = Field(default_factory=_now)
     progress: int = 0               # 0-100, rough completion of current task
+    last_activity: Optional[str] = None  # latest log line, for at-a-glance views
 
 
 # ---- request bodies ----

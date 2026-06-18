@@ -1,55 +1,67 @@
 import { useEffect, useState } from "react";
 import { useAgents } from "./lib/useAgents.js";
 import Sidebar from "./components/Sidebar.jsx";
+import Overview from "./components/Overview.jsx";
 import AgentPanel from "./components/AgentPanel.jsx";
 import CreateAgentModal from "./components/CreateAgentModal.jsx";
 
 export default function App() {
   const store = useAgents();
+  const [view, setView] = useState("overview"); // "overview" | "detail"
   const [selectedId, setSelectedId] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
 
   const selected = store.agents.find((a) => a.id === selectedId) || null;
 
-  // Load logs/chat the first time an agent is opened.
-  useEffect(() => {
-    if (selectedId && !store.detail[selectedId]) store.loadDetail(selectedId);
-  }, [selectedId, store]);
+  const openAgent = (id) => {
+    setSelectedId(id);
+    setView("detail");
+  };
+  const goOverview = () => {
+    setView("overview");
+    setSelectedId(null);
+  };
 
-  // Auto-select the first agent once we have any.
+  // Load logs/chat the first time an agent's detail is opened.
   useEffect(() => {
-    if (!selectedId && store.agents.length) setSelectedId(store.agents[0].id);
-  }, [store.agents, selectedId]);
+    if (view === "detail" && selectedId && !store.detail[selectedId]) {
+      store.loadDetail(selectedId);
+    }
+  }, [view, selectedId, store]);
 
   return (
     <div className="app">
       <Sidebar
         agents={store.agents}
         connected={store.connected}
+        view={view}
         selectedId={selectedId}
-        onSelect={setSelectedId}
+        onOverview={goOverview}
+        onSelect={openAgent}
         onNew={() => setShowCreate(true)}
       />
+
       <main className="main">
-        {selected ? (
+        {view === "overview" || !selected ? (
+          <Overview
+            agents={store.agents}
+            onOpen={openAgent}
+            onDeploy={(id, text) => store.sendChat(id, text)}
+            onStop={(id) => store.stopAgent(id)}
+            onNew={() => setShowCreate(true)}
+          />
+        ) : (
           <AgentPanel
             agent={selected}
             detail={store.detail[selected.id]}
+            onBack={goOverview}
             onChat={(text) => store.sendChat(selected.id, text)}
             onStop={() => store.stopAgent(selected.id)}
             onDelete={async () => {
               await store.deleteAgent(selected.id);
-              setSelectedId(null);
+              goOverview();
             }}
           />
-        ) : (
-          <div className="empty">
-            <h2>No agent selected</h2>
-            <p>Create an agent to deploy it, then chat to put it to work.</p>
-            <button className="btn primary" onClick={() => setShowCreate(true)}>
-              + Deploy your first agent
-            </button>
-          </div>
         )}
       </main>
 
@@ -59,7 +71,7 @@ export default function App() {
           onCreate={async (name, role) => {
             const a = await store.createAgent(name, role);
             setShowCreate(false);
-            setSelectedId(a.id);
+            openAgent(a.id);
           }}
         />
       )}

@@ -2,13 +2,14 @@ import StatusDot from "./StatusDot.jsx";
 import LogStream from "./LogStream.jsx";
 import Chat from "./Chat.jsx";
 
-export default function AgentPanel({ agent, detail, onChat, onStop, onDelete }) {
+export default function AgentPanel({ agent, detail, onBack, onChat, onStop, onDelete }) {
   const busy = agent.status === "running" || agent.status === "queued";
 
   return (
     <div className="panel">
       <header className="panel-head">
         <div className="panel-title">
+          <button className="btn back" onClick={onBack} title="Back to fleet">←</button>
           <StatusDot status={agent.status} />
           <div>
             <h2>{agent.name}</h2>
