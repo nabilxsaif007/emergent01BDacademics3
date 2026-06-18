@@ -1,4 +1,5 @@
 import StatusDot from "./StatusDot.jsx";
+import ThemeSwitcher from "./ThemeSwitcher.jsx";
 
 export default function Sidebar({ agents, connected, view, selectedId, onOverview, onSelect, onNew }) {
   const running = agents.filter((a) => a.status === "running").length;
@@ -47,6 +48,10 @@ export default function Sidebar({ agents, connected, view, selectedId, onOvervie
             )}
           </button>
         ))}
+      </div>
+
+      <div className="sidebar-footer">
+        <ThemeSwitcher />
       </div>
     </aside>
   );

@@ -1,15 +1,21 @@
 import { useState } from "react";
 
 const ROLES = ["general", "coder", "researcher", "writer", "ops"];
+const MODELS = [
+  ["claude-opus-4-8", "Opus 4.8 — most capable"],
+  ["claude-sonnet-4-6", "Sonnet 4.6 — balanced"],
+  ["claude-haiku-4-5", "Haiku 4.5 — fast & cheap"],
+];
 
 export default function CreateAgentModal({ onClose, onCreate }) {
   const [name, setName] = useState("");
   const [role, setRole] = useState("general");
+  const [model, setModel] = useState("claude-sonnet-4-6");
 
   const submit = (e) => {
     e.preventDefault();
     if (!name.trim()) return;
-    onCreate(name.trim(), role);
+    onCreate(name.trim(), role, model);
   };
 
   return (
@@ -31,6 +37,14 @@ export default function CreateAgentModal({ onClose, onCreate }) {
             <select value={role} onChange={(e) => setRole(e.target.value)}>
               {ROLES.map((r) => (
                 <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Model
+            <select value={model} onChange={(e) => setModel(e.target.value)}>
+              {MODELS.map(([id, label]) => (
+                <option key={id} value={id}>{label}</option>
               ))}
             </select>
           </label>

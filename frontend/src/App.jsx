@@ -45,6 +45,8 @@ export default function App() {
         {view === "overview" || !selected ? (
           <Overview
             agents={store.agents}
+            feed={store.feed}
+            metrics={store.metrics}
             onOpen={openAgent}
             onDeploy={(id, text) => store.sendChat(id, text)}
             onStop={(id) => store.stopAgent(id)}
@@ -68,8 +70,8 @@ export default function App() {
       {showCreate && (
         <CreateAgentModal
           onClose={() => setShowCreate(false)}
-          onCreate={async (name, role) => {
-            const a = await store.createAgent(name, role);
+          onCreate={async (name, role, model) => {
+            const a = await store.createAgent(name, role, model);
             setShowCreate(false);
             openAgent(a.id);
           }}

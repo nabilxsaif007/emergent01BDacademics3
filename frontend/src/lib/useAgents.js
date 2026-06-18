@@ -3,10 +3,14 @@ import { api } from "./api.js";
 
 // Central store: keeps the agent list in sync via WebSocket, and lazily loads
 // per-agent logs + chat history. Returns everything App needs.
+const FEED_CAP = 200;
+
 export function useAgents() {
   const [agents, setAgents] = useState([]);
   const [connected, setConnected] = useState(false);
   const [detail, setDetail] = useState({}); // id -> { logs: [], messages: [] }
+  const [feed, setFeed] = useState([]); // newest-first global activity
+  const [metrics, setMetrics] = useState(null); // cost/token aggregates
   const wsRef = useRef(null);
 
   const upsertAgent = useCallback((agent) => {
@@ -32,6 +36,14 @@ export function useAgents() {
       switch (msg.type) {
         case "snapshot":
           setAgents(msg.agents);
+          if (msg.feed) setFeed(msg.feed);
+          if (msg.metrics) setMetrics(msg.metrics);
+          break;
+        case "activity":
+          setFeed((prev) => [msg.event, ...prev].slice(0, FEED_CAP));
+          break;
+        case "metrics":
+          setMetrics(msg.metrics);
           break;
         case "agent_created":
         case "agent_updated":
@@ -66,7 +78,7 @@ export function useAgents() {
     setDetail((prev) => ({ ...prev, [id]: { logs: data.logs, messages: data.messages } }));
   }, []);
 
-  const createAgent = useCallback((name, role) => api.createAgent(name, role), []);
+  const createAgent = useCallback((name, role, model) => api.createAgent(name, role, model), []);
   const deleteAgent = useCallback((id) => api.deleteAgent(id), []);
   const sendChat = useCallback((id, content) => api.chat(id, content), []);
   const stopAgent = useCallback((id) => api.stop(id), []);
@@ -75,6 +87,8 @@ export function useAgents() {
     agents,
     connected,
     detail,
+    feed,
+    metrics,
     loadDetail,
     createAgent,
     deleteAgent,

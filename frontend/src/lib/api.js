@@ -11,8 +11,8 @@ async function req(path, options = {}) {
 
 export const api = {
   listAgents: () => req("/api/agents"),
-  createAgent: (name, role) =>
-    req("/api/agents", { method: "POST", body: JSON.stringify({ name, role }) }),
+  createAgent: (name, role, model) =>
+    req("/api/agents", { method: "POST", body: JSON.stringify({ name, role, model }) }),
   getAgent: (id) => req(`/api/agents/${id}`),
   deleteAgent: (id) => req(`/api/agents/${id}`, { method: "DELETE" }),
   chat: (id, content) =>

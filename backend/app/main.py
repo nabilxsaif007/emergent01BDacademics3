@@ -29,6 +29,16 @@ async def list_agents():
     return [a.model_dump() for a in manager.list_agents()]
 
 
+@app.get("/api/feed")
+async def feed():
+    return [e.model_dump() for e in manager.feed()]
+
+
+@app.get("/api/metrics")
+async def metrics():
+    return manager.metrics()
+
+
 @app.post("/api/agents", status_code=201)
 async def create_agent(body: CreateAgent):
     agent = await manager.create(body)
@@ -76,7 +86,12 @@ async def ws(websocket: WebSocket):
     try:
         # send a snapshot so a fresh dashboard is immediately in sync
         await websocket.send_json(
-            {"type": "snapshot", "agents": [a.model_dump() for a in manager.list_agents()]}
+            {
+                "type": "snapshot",
+                "agents": [a.model_dump() for a in manager.list_agents()],
+                "feed": [e.model_dump() for e in manager.feed()],
+                "metrics": manager.metrics(),
+            }
         )
         while True:
             await websocket.receive_text()  # keep-alive; we don't expect client msgs

@@ -5,15 +5,20 @@ single-process dashboard. Swap for async/Postgres later if it ever needs to.
 """
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import threading
-from typing import Any
+import time
 
-from .models import Agent, ChatMessage, LogLine
+from .models import ActivityEvent, Agent, ChatMessage, LogLine
 
 DB_PATH = os.environ.get("AGENT_DB", os.path.join(os.path.dirname(__file__), "..", "agents.db"))
+
+FEED_LIMIT = 300  # how many recent activity events to retain / serve
+
+
+def _day(ts: float) -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(ts))
 
 
 class Store:
@@ -44,8 +49,22 @@ class Store:
                     data TEXT NOT NULL,
                     ts REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS activity (
+                    id TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    ts REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS usage_daily (
+                    day TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    tokens_in INTEGER NOT NULL DEFAULT 0,
+                    tokens_out INTEGER NOT NULL DEFAULT 0,
+                    cost REAL NOT NULL DEFAULT 0,
+                    PRIMARY KEY (day, model)
+                );
                 CREATE INDEX IF NOT EXISTS idx_logs_agent ON logs(agent_id, ts);
                 CREATE INDEX IF NOT EXISTS idx_msgs_agent ON messages(agent_id, ts);
+                CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
                 """
             )
             self._conn.commit()
@@ -87,6 +106,75 @@ class Store:
 
     def messages_for(self, agent_id: str) -> list[ChatMessage]:
         return [ChatMessage.model_validate_json(d) for d in self._list("messages", agent_id)]
+
+    # ---- activity feed (global, cross-agent) ----
+    def add_activity(self, ev: ActivityEvent) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO activity (id, data, ts) VALUES (?, ?, ?)",
+                (ev.id, ev.model_dump_json(), ev.ts),
+            )
+            # keep the feed bounded
+            self._conn.execute(
+                "DELETE FROM activity WHERE id NOT IN "
+                "(SELECT id FROM activity ORDER BY ts DESC LIMIT ?)",
+                (FEED_LIMIT,),
+            )
+            self._conn.commit()
+
+    def recent_activity(self, limit: int = FEED_LIMIT) -> list[ActivityEvent]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT data FROM activity ORDER BY ts DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [ActivityEvent.model_validate_json(r["data"]) for r in rows]
+
+    # ---- usage / cost ----
+    def add_usage(self, model: str, tokens_in: int, tokens_out: int, cost: float, ts: float) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO usage_daily (day, model, tokens_in, tokens_out, cost) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(day, model) DO UPDATE SET "
+                "tokens_in = tokens_in + excluded.tokens_in, "
+                "tokens_out = tokens_out + excluded.tokens_out, "
+                "cost = cost + excluded.cost",
+                (_day(ts), model, tokens_in, tokens_out, cost),
+            )
+            self._conn.commit()
+
+    def metrics(self, days: int = 14) -> dict:
+        today = _day(time.time())
+        with self._lock:
+            total = self._conn.execute(
+                "SELECT COALESCE(SUM(tokens_in),0) ti, COALESCE(SUM(tokens_out),0) to_, "
+                "COALESCE(SUM(cost),0) c FROM usage_daily"
+            ).fetchone()
+            tday = self._conn.execute(
+                "SELECT COALESCE(SUM(tokens_in),0) ti, COALESCE(SUM(tokens_out),0) to_, "
+                "COALESCE(SUM(cost),0) c FROM usage_daily WHERE day=?",
+                (today,),
+            ).fetchone()
+            by_model = self._conn.execute(
+                "SELECT model, SUM(tokens_in) ti, SUM(tokens_out) to_, SUM(cost) c "
+                "FROM usage_daily GROUP BY model ORDER BY c DESC"
+            ).fetchall()
+            daily = self._conn.execute(
+                "SELECT day, SUM(tokens_in) ti, SUM(tokens_out) to_, SUM(cost) c "
+                "FROM usage_daily GROUP BY day ORDER BY day DESC LIMIT ?",
+                (days,),
+            ).fetchall()
+        return {
+            "total": {"tokens_in": total["ti"], "tokens_out": total["to_"], "cost": total["c"]},
+            "today": {"tokens_in": tday["ti"], "tokens_out": tday["to_"], "cost": tday["c"]},
+            "by_model": [
+                {"model": r["model"], "tokens_in": r["ti"], "tokens_out": r["to_"], "cost": r["c"]}
+                for r in by_model
+            ],
+            "daily": [
+                {"day": r["day"], "tokens_in": r["ti"], "tokens_out": r["to_"], "cost": r["c"]}
+                for r in reversed(daily)
+            ],
+        }
 
     # ---- helpers ----
     def _add(self, table: str, agent_id: str, row_id: str, data: str, ts: float) -> None:

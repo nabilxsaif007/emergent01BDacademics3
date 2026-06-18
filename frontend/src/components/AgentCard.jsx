@@ -1,11 +1,16 @@
 import { useState } from "react";
 import StatusDot from "./StatusDot.jsx";
 
-// A live tile in the fleet grid: status, current task, last activity, and an
-// inline box to dispatch a task without leaving the overview.
+const shortModel = (m) => (m || "").replace("claude-", "").replace(/-\d+$/, "");
+const money = (n) => "$" + (n || 0).toFixed(n >= 1 ? 2 : 4);
+const compact = (n) => (n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n || 0));
+
+// A live tile in the fleet grid: status, current task, last activity, usage,
+// and an inline box to dispatch a task without leaving the overview.
 export default function AgentCard({ agent, onOpen, onDeploy, onStop }) {
   const [text, setText] = useState("");
   const busy = agent.status === "running" || agent.status === "queued";
+  const stalled = busy && Date.now() / 1000 - (agent.last_beat || 0) > 30;
 
   const dispatch = (e) => {
     e.preventDefault();
@@ -44,8 +49,19 @@ export default function AgentCard({ agent, onOpen, onDeploy, onStop }) {
       </div>
 
       <div className="card-activity" onClick={onOpen} role="button">
-        <span className="dot-tick" />
+        <span className={`dot-tick ${stalled ? "stalled" : ""}`} />
         {agent.last_activity || "idle"}
+      </div>
+
+      <div className="card-meta" onClick={onOpen} role="button">
+        <span className="meta-model">{shortModel(agent.model)}</span>
+        <span className="meta-sep">·</span>
+        <span title="tokens">{compact((agent.tokens_in || 0) + (agent.tokens_out || 0))} tok</span>
+        <span className="meta-sep">·</span>
+        <span title="cost">{money(agent.cost_usd)}</span>
+        {agent.tasks_done > 0 && (
+          <span className="meta-tasks">{agent.tasks_done} done</span>
+        )}
       </div>
 
       {busy ? (

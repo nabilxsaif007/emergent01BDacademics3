@@ -1,9 +1,16 @@
+import { useState } from "react";
 import StatusDot from "./StatusDot.jsx";
 import LogStream from "./LogStream.jsx";
 import Chat from "./Chat.jsx";
+import Timeline from "./Timeline.jsx";
+
+const shortModel = (m) => (m || "").replace("claude-", "").replace(/-\d+$/, "");
+const money = (n) => "$" + (n || 0).toFixed(n >= 1 ? 2 : 4);
+const compact = (n) => (n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n || 0));
 
 export default function AgentPanel({ agent, detail, onBack, onChat, onStop, onDelete }) {
   const busy = agent.status === "running" || agent.status === "queued";
+  const [tab, setTab] = useState("activity"); // "activity" | "timeline"
 
   return (
     <div className="panel">
@@ -24,6 +31,13 @@ export default function AgentPanel({ agent, detail, onBack, onChat, onStop, onDe
         </div>
       </header>
 
+      <div className="panel-metrics">
+        <Metric label="Model" value={shortModel(agent.model)} />
+        <Metric label="Tokens" value={compact((agent.tokens_in || 0) + (agent.tokens_out || 0))} />
+        <Metric label="Cost" value={money(agent.cost_usd)} />
+        <Metric label="Tasks done" value={agent.tasks_done || 0} />
+      </div>
+
       {busy && (
         <div className="progress">
           <span style={{ width: `${agent.progress}%` }} />
@@ -40,10 +54,28 @@ export default function AgentPanel({ agent, detail, onBack, onChat, onStop, onDe
           />
         </section>
         <section className="col log-col">
-          <h3 className="col-title">Activity</h3>
-          <LogStream logs={detail?.logs || []} />
+          <div className="col-tabs">
+            <button className={tab === "activity" ? "active" : ""} onClick={() => setTab("activity")}>
+              Activity
+            </button>
+            <button className={tab === "timeline" ? "active" : ""} onClick={() => setTab("timeline")}>
+              Timeline
+            </button>
+          </div>
+          {tab === "activity"
+            ? <LogStream logs={detail?.logs || []} />
+            : <Timeline logs={detail?.logs || []} />}
         </section>
       </div>
+    </div>
+  );
+}
+
+function Metric({ label, value }) {
+  return (
+    <div className="metric">
+      <div className="metric-value">{value}</div>
+      <div className="metric-label">{label}</div>
     </div>
   );
 }
