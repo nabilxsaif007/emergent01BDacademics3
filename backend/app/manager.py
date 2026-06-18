@@ -2,7 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
+
+# Where each agent's working directory lives (one subdir per agent).
+WORKSPACE_ROOT = os.environ.get(
+    "AGENT_WORKSPACE_ROOT",
+    os.path.join(os.path.dirname(__file__), "..", "workspaces"),
+)
 
 from fastapi import WebSocket
 
@@ -123,7 +130,9 @@ class AgentManager:
 
     # ---- internals ----
     async def _run(self, agent: Agent, prompt: str) -> None:
-        runner = get_runner(agent.model)
+        workspace = os.path.join(WORKSPACE_ROOT, agent.id)
+        os.makedirs(workspace, exist_ok=True)
+        runner = get_runner(agent.model, workspace, agent.role)
         await self._set_status(agent, AgentStatus.running)
 
         async def emit(kind: str, payload: object) -> None:
@@ -155,7 +164,9 @@ class AgentManager:
         tout = int(usage.get("tokens_out", 0))
         if tin == 0 and tout == 0:
             return
-        cost = cost_for(agent.model, tin, tout)
+        # Prefer the exact cost the runner reports (real SDK); else estimate.
+        cost = usage.get("cost")
+        cost = float(cost) if cost is not None else cost_for(agent.model, tin, tout)
         agent.tokens_in += tin
         agent.tokens_out += tout
         agent.cost_usd += cost

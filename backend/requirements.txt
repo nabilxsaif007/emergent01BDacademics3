@@ -1,3 +1,6 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
+# Real agent execution. Requires the `claude` CLI on PATH (logged in) or an
+# ANTHROPIC_API_KEY. Without it, the app falls back to the built-in mock runner.
+claude-agent-sdk==0.2.104

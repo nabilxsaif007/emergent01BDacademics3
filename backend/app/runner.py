@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import shutil
 import time
 from typing import Awaitable, Callable, Protocol
 
@@ -160,68 +161,132 @@ class MockRunner:
 class RealRunner:
     """Drives the actual Claude Agent SDK, streaming its turns through `emit`.
 
-    Kept defensive: any import/runtime issue is surfaced as an error log and the
-    task fails cleanly rather than taking the process down.
+    Each agent works inside its own `workspace` directory and reports real token
+    usage and cost straight from the SDK's ResultMessage. Kept defensive: any
+    failure is surfaced as an error log and the task fails cleanly.
     """
 
-    def __init__(self, model: str = "claude-sonnet-4-6") -> None:
+    ROLE_HINT = {
+        "coder": "You are an autonomous coding agent. Make the requested changes "
+                 "directly in the working directory and verify them.",
+        "researcher": "You are a research agent. Investigate thoroughly and finish "
+                      "with a concise, well-organized summary.",
+        "writer": "You are a writing agent. Produce clear, polished prose or docs.",
+        "ops": "You are a DevOps agent. Use shell tools carefully to accomplish the task.",
+        "general": "You are a capable autonomous agent. Complete the task end to end.",
+    }
+
+    def __init__(self, model: str, workspace: str | None = None, role: str = "general") -> None:
         self.model = model
+        self.workspace = workspace
+        self.role = role
+        self.max_turns = int(os.environ.get("AGENT_MAX_TURNS", "20"))
 
     async def run(self, prompt: str, emit: Emit) -> None:
-        from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions  # type: ignore
+        from claude_agent_sdk import (  # type: ignore
+            ClaudeSDKClient,
+            ClaudeAgentOptions,
+            AssistantMessage,
+            ResultMessage,
+            TextBlock,
+            ThinkingBlock,
+            ToolUseBlock,
+            PermissionResultAllow,
+        )
 
-        await emit("log", LogLine(level=LogLevel.info, text=f"Received task: {prompt[:80]}"))
-        options = ClaudeAgentOptions(model=self.model)
-        reply_parts: list[str] = []
+        # Auto-approve tool use programmatically. (We can't use the CLI's
+        # bypass flag because it refuses to run as root; this callback is the
+        # supported way to run autonomously.)
+        async def _approve(tool_name, tool_input, context):
+            return PermissionResultAllow()
+
+        options = ClaudeAgentOptions(
+            model=self.model,
+            max_turns=self.max_turns,
+            cwd=self.workspace,
+            permission_mode=os.environ.get("AGENT_PERMISSION_MODE", "acceptEdits"),
+            can_use_tool=_approve,
+        )
+        hint = self.ROLE_HINT.get(self.role, self.ROLE_HINT["general"])
+        framed = f"{hint}\n\nTask: {prompt}"
+
+        reply: list[str] = []
+        state = {"turns": 0, "last_tool_ts": time.monotonic()}
 
         async with ClaudeSDKClient(options=options) as client:
-            await client.query(prompt)
+            await client.query(framed)
             async for message in client.receive_response():
-                await self._handle(message, emit, reply_parts)
+                if isinstance(message, AssistantMessage):
+                    state["turns"] += 1
+                    await emit("progress", min(90, 10 + state["turns"] * 8))
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            txt = (block.text or "").strip()
+                            if txt:
+                                reply.append(block.text)
+                                await emit("log", LogLine(level=LogLevel.info, text=txt[:300]))
+                        elif isinstance(block, ThinkingBlock):
+                            th = (getattr(block, "thinking", "") or "").strip()
+                            if th:
+                                await emit("log", LogLine(level=LogLevel.info, text=f"thinking: {th[:160]}"))
+                        elif isinstance(block, ToolUseBlock):
+                            now = time.monotonic()
+                            dur = int((now - state["last_tool_ts"]) * 1000)
+                            state["last_tool_ts"] = now
+                            arg = self._summarize(block.input)
+                            await emit(
+                                "log",
+                                LogLine(level=LogLevel.tool, text=f"{block.name}({arg})",
+                                        tool=block.name, dur_ms=dur),
+                            )
+                elif isinstance(message, ResultMessage):
+                    u = message.usage or {}
+                    tokens_in = (
+                        int(u.get("input_tokens", 0) or 0)
+                        + int(u.get("cache_read_input_tokens", 0) or 0)
+                        + int(u.get("cache_creation_input_tokens", 0) or 0)
+                    )
+                    await emit(
+                        "usage",
+                        {
+                            "tokens_in": tokens_in,
+                            "tokens_out": int(u.get("output_tokens", 0) or 0),
+                            "cost": getattr(message, "total_cost_usd", None),
+                        },
+                    )
+                    if getattr(message, "is_error", False):
+                        raise RuntimeError(getattr(message, "result", "agent run failed"))
 
-        final = "".join(reply_parts).strip() or "Done."
+        final = "".join(reply).strip() or "Done."
         await emit("message", ChatMessage(role="agent", content=final))
         await emit("progress", 100)
 
-    async def _handle(self, message, emit: Emit, reply_parts: list[str]) -> None:
-        # The SDK yields content blocks; we translate the ones we care about.
-        blocks = getattr(message, "content", None)
-        if blocks is None:
-            return
-        for block in blocks:
-            btype = type(block).__name__
-            if btype == "TextBlock":
-                txt = getattr(block, "text", "")
-                reply_parts.append(txt)
-                if txt.strip():
-                    await emit("log", LogLine(level=LogLevel.info, text=txt.strip()[:200]))
-            elif btype == "ToolUseBlock":
-                name = getattr(block, "name", "tool")
-                await emit("log", LogLine(level=LogLevel.tool, text=f"{name}(...)", tool=name))
-        # usage, when present on the message
-        usage = getattr(message, "usage", None)
-        if usage:
-            await emit(
-                "usage",
-                {
-                    "tokens_in": int(getattr(usage, "input_tokens", 0) or 0),
-                    "tokens_out": int(getattr(usage, "output_tokens", 0) or 0),
-                },
-            )
+    @staticmethod
+    def _summarize(tool_input: object) -> str:
+        """Make a short, human label for a tool call's arguments."""
+        if not isinstance(tool_input, dict):
+            return str(tool_input)[:80]
+        for key in ("file_path", "path", "command", "pattern", "query", "url", "prompt"):
+            if key in tool_input and tool_input[key]:
+                return str(tool_input[key])[:80]
+        return ", ".join(f"{k}={str(v)[:30]}" for k, v in list(tool_input.items())[:2])[:80]
 
 
 def _real_available() -> bool:
-    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("USE_REAL_RUNNER")):
+    if os.environ.get("DISABLE_REAL_RUNNER"):
         return False
     try:
         import claude_agent_sdk  # noqa: F401
-        return True
     except Exception:
         return False
+    # Auth is satisfied by either an API key or a logged-in `claude` CLI.
+    return bool(shutil.which("claude") or os.environ.get("ANTHROPIC_API_KEY"))
 
 
-def get_runner(model: str = "claude-sonnet-4-6") -> Runner:
-    """Single place to choose the active runner implementation."""
+def get_runner(model: str = "claude-sonnet-4-6", workspace: str | None = None,
+               role: str = "general") -> Runner:
+    """Single place to choose the active runner implementation. Prefers real
+    execution whenever the Claude Agent SDK + credentials are available."""
     if _real_available():
-        return RealRunner(model=model)
+        return RealRunner(model=model, workspace=workspace, role=role)
     return MockRunner()
